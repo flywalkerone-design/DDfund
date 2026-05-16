@@ -1,207 +1,272 @@
-"""
-天天基金涨跌幅前100排名查询 - Web 应用
-部署方式（三选一）：
-  1. Render.com（免费，海外）: 直接推送 Git 仓库即可
-  2. PythonAnywhere（免费）: 上传文件后在 Web 面板配置
-  3. 自建服务器: python app.py 启动
-"""
-
-import re
 import json
+import re
+from datetime import datetime
+
 import requests
-from flask import Flask, request, jsonify, send_from_directory
-from datetime import datetime, timedelta
+from flask import Flask, jsonify, request
+
 
 app = Flask(__name__)
 
-API_URL = "https://fund.eastmoney.com/data/rankhandler.aspx"
+EASTMONEY_API = "https://fund.eastmoney.com/data/rankhandler.aspx"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://fund.eastmoney.com/data/fundranking.html",
+    "Accept": "*/*",
+}
 
-HTML_PAGE = r"""<!DOCTYPE html>
+
+HTML_PAGE = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>天天基金涨跌幅前100排名查询</title>
-<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
-.header{background:linear-gradient(135deg,#1a73e8 0%,#1557b0 100%);color:#fff;padding:24px 0;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.15)}
-.header h1{font-size:26px;font-weight:600;letter-spacing:1px}
-.subtitle{font-size:13px;opacity:.85;margin-top:6px}
-.controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:20px;background:#fff;margin:20px auto 0;max-width:900px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);flex-wrap:wrap}
-.controls label{font-weight:600;font-size:14px}
-.controls input[type="date"]{padding:8px 14px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;outline:none;transition:border-color .2s}
-.controls input[type="date"]:focus{border-color:#1a73e8}
-.btn{padding:9px 22px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;letter-spacing:.5px}
-.btn-query{background:#1a73e8;color:#fff}
-.btn-query:hover{background:#1557b0}
-.btn-query:disabled{background:#93b8f0;cursor:not-allowed}
-.btn-excel{background:#fff;color:#217346;border:2px solid #217346}
-.btn-excel:hover{background:#e8f5e9}
-.btn-excel:disabled{color:#999;border-color:#ccc;cursor:not-allowed}
-.status{text-align:center;margin-top:12px;font-size:13px;color:#888;min-height:20px}
-.status.error{color:#d93025}
-.status.success{color:#1e8e3e}
-.content{display:flex;gap:20px;max-width:1400px;margin:20px auto;padding:0 20px;flex-wrap:wrap}
-.table-section{flex:1;min-width:500px;background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden}
-.table-section h2{font-size:17px;padding:14px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:8px}
-.badge{font-size:12px;padding:2px 10px;border-radius:12px;color:#fff}
-.badge-up{background:#e53935}
-.badge-down{background:#43a047}
-.table-wrap{overflow-x:auto;max-height:600px;overflow-y:auto}
-table{width:100%;border-collapse:collapse;font-size:13px}
-thead{position:sticky;top:0;z-index:1}
-thead th{background:#f8f9fa;padding:10px 12px;text-align:left;border-bottom:2px solid #e0e0e0;font-weight:600;white-space:nowrap}
-tbody td{padding:8px 12px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
-tbody tr:hover{background:#f5f8ff}
-.growth-up{color:#e53935;font-weight:600}
-.growth-down{color:#43a047;font-weight:600}
-.empty-state{text-align:center;padding:60px 20px;color:#999}
-.footer{text-align:center;padding:20px;color:#999;font-size:12px}
-@media(max-width:1100px){.content{flex-direction:column}.table-section{min-width:auto}}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>天天基金涨跌幅前100排名查询</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#f4f6f8;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Arial,sans-serif}
+    header{background:#1455a8;color:white;padding:24px 20px;text-align:center}
+    h1{margin:0;font-size:26px;font-weight:650}
+    .sub{margin-top:8px;font-size:13px;opacity:.86}
+    .controls{max-width:980px;margin:18px auto 0;background:white;border:1px solid #e5e7eb;border-radius:8px;padding:16px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap}
+    label{font-weight:650}
+    input{height:38px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;font-size:14px}
+    button{height:38px;border:0;border-radius:6px;padding:0 18px;font-size:14px;font-weight:650;cursor:pointer}
+    button:disabled{cursor:not-allowed;opacity:.55}
+    .primary{background:#1769d1;color:white}
+    .excel{background:white;color:#16733c;border:1px solid #16733c}
+    #status{text-align:center;min-height:22px;margin:12px auto;color:#64748b;font-size:13px}
+    #status.ok{color:#16733c}
+    #status.err{color:#c62828}
+    main{max-width:1440px;margin:0 auto;padding:0 18px 24px;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    section{background:white;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden}
+    h2{font-size:17px;margin:0;padding:13px 16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:8px}
+    .badge{display:inline-block;color:white;border-radius:999px;padding:2px 10px;font-size:12px}
+    .up-badge{background:#d93025}
+    .down-badge{background:#188038}
+    .table-wrap{overflow:auto;max-height:650px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:9px 10px;border-bottom:1px solid #eef2f7;text-align:left;white-space:nowrap}
+    th{position:sticky;top:0;background:#f8fafc;z-index:1;font-weight:700}
+    tbody tr:hover{background:#f8fbff}
+    .up{color:#d93025;font-weight:700}
+    .down{color:#188038;font-weight:700}
+    .empty{text-align:center;color:#94a3b8;padding:42px 10px}
+    footer{text-align:center;color:#94a3b8;font-size:12px;padding:18px}
+    @media(max-width:1100px){main{grid-template-columns:1fr}}
+  </style>
 </head>
 <body>
+  <header>
+    <h1>天天基金涨跌幅前100排名查询</h1>
+    <div class="sub">数据来源：天天基金网。非交易日会自动取该日期前最近可用净值。</div>
+  </header>
 
-<div class="header">
-  <h1>天天基金涨跌幅前100排名查询</h1>
-  <div class="subtitle">数据来源：天天基金网（fund.eastmoney.com）</div>
-</div>
-
-<div class="controls">
-  <label for="queryDate">查询日期：</label>
-  <input type="date" id="queryDate" />
-  <button class="btn btn-query" id="btnQuery" onclick="queryData()">查询</button>
-  <button class="btn btn-excel" id="btnExcel" onclick="downloadExcel()" disabled>下载 Excel</button>
-</div>
-<div class="status" id="status"></div>
-
-<div class="content">
-  <div class="table-section">
-    <h2><span class="badge badge-up">涨幅</span> 涨幅前100名</h2>
-    <div class="table-wrap">
-      <table id="gainersTable">
-        <thead><tr><th>排名</th><th>基金代码</th><th>基金名称</th><th>净值日期</th><th>单位净值</th><th>累计净值</th><th>日增长率</th></tr></thead>
-        <tbody><tr class="empty-state"><td colspan="7">点击"查询"获取数据</td></tr></tbody>
-      </table>
-    </div>
+  <div class="controls">
+    <label for="queryDate">查询日期</label>
+    <input id="queryDate" type="date">
+    <button id="queryBtn" class="primary" onclick="queryData()">查询</button>
+    <button id="excelBtn" class="excel" onclick="downloadExcel()" disabled>下载 Excel</button>
   </div>
-  <div class="table-section">
-    <h2><span class="badge badge-down">跌幅</span> 跌幅前100名</h2>
-    <div class="table-wrap">
-      <table id="losersTable">
-        <thead><tr><th>排名</th><th>基金代码</th><th>基金名称</th><th>净值日期</th><th>单位净值</th><th>累计净值</th><th>日增长率</th></tr></thead>
-        <tbody><tr class="empty-state"><td colspan="7">点击"查询"获取数据</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-</div>
+  <div id="status"></div>
 
-<div class="footer">数据仅供参考，不构成投资建议 | 数据来源：天天基金网</div>
+  <main>
+    <section>
+      <h2><span class="badge up-badge">涨幅</span>涨幅前100</h2>
+      <div class="table-wrap">
+        <table id="gainers">
+          <thead><tr><th>排名</th><th>基金代码</th><th>基金名称</th><th>净值日期</th><th>单位净值</th><th>累计净值</th><th>日增长率</th></tr></thead>
+          <tbody><tr><td class="empty" colspan="7">请选择日期后查询</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="badge down-badge">跌幅</span>跌幅前100</h2>
+      <div class="table-wrap">
+        <table id="losers">
+          <thead><tr><th>排名</th><th>基金代码</th><th>基金名称</th><th>净值日期</th><th>单位净值</th><th>累计净值</th><th>日增长率</th></tr></thead>
+          <tbody><tr><td class="empty" colspan="7">请选择日期后查询</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>数据仅供参考，不构成投资建议。</footer>
 
 <script>
-var lastGainers=null,lastLosers=null,lastQueryDate='';
+let gainers = [];
+let losers = [];
+let currentDate = "";
 
-function $(id){return document.getElementById(id)}
+const $ = (id) => document.getElementById(id);
 
-function setStatus(msg,cls){
-  var el=$('status');
-  el.textContent=msg;
-  el.className='status '+(cls||'');
+function setStatus(text, type="") {
+  const el = $("status");
+  el.textContent = text;
+  el.className = type;
 }
 
-function parseFunds(rawDatas){
-  if(!rawDatas||!Array.isArray(rawDatas))return[];
-  return rawDatas.map(function(item){
-    var f=item.split(',');
-    if(f.length<7||isNaN(parseFloat(f[6])))return null;
-    return{code:f[0],name:f[1],date:f[3],unitNav:f[4],cumNav:f[5],dayGrowth:parseFloat(f[6])};
-  }).filter(Boolean);
+function fmtPct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  return (n > 0 ? "+" : "") + n.toFixed(2) + "%";
 }
 
-function renderTable(tableId,funds,sortDesc){
-  var tbody=document.querySelector('#'+tableId+' tbody');
-  if(!funds.length){tbody.innerHTML='<tr class="empty-state"><td colspan="7">暂无数据</td></tr>';return}
-  var sorted=funds.slice().sort(function(a,b){return sortDesc?b.dayGrowth-a.dayGrowth:a.dayGrowth-b.dayGrowth});
-  tbody.innerHTML=sorted.map(function(f,i){
-    var cls=f.dayGrowth>=0?'growth-up':'growth-down';
-    var sign=f.dayGrowth>0?'+':'';
-    return '<tr><td>'+(i+1)+'</td><td>'+f.code+'</td><td>'+f.name+'</td><td>'+f.date+'</td><td>'+f.unitNav+'</td><td>'+f.cumNav+'</td><td class="'+cls+'">'+sign+f.dayGrowth.toFixed(2)+'%</td></tr>';
-  }).join('');
-}
-
-async function fetchRanking(sortOrder,date){
-  var d=new Date(date);d.setFullYear(d.getFullYear()-1);
-  var sd=d.toISOString().split('T')[0];
-  var params='op=ph&dt=kf&ft=all&sc=srzdf&st='+sortOrder+'&sd='+sd+'&ed='+date+'&pi=1&pn=100&dx=1';
-  var resp=await fetch('/api?'+params);
-  if(!resp.ok)throw new Error('服务器返回错误: '+resp.status);
-  var data=await resp.json();
-  return data.datas||[];
-}
-
-async function queryData(){
-  var date=$('queryDate').value;
-  if(!date){setStatus('请选择查询日期','error');return}
-  lastQueryDate=date;lastGainers=null;lastLosers=null;
-  $('btnQuery').disabled=true;$('btnExcel').disabled=true;
-  setStatus('正在查询中...','');
-  try{
-    setStatus('正在抓取涨幅前100名...','');
-    lastGainers=parseFunds(await fetchRanking('desc',date));
-    renderTable('gainersTable',lastGainers,true);
-    setStatus('正在抓取跌幅前100名...','');
-    lastLosers=parseFunds(await fetchRanking('asc',date));
-    renderTable('losersTable',lastLosers,false);
-    if(lastGainers.length||lastLosers.length){
-      var d=(lastGainers[0]||lastLosers[0]).date;
-      setStatus('查询完成！涨幅前'+lastGainers.length+'名 / 跌幅前'+lastLosers.length+'名（净值日期：'+d+'）','success');
-      $('btnExcel').disabled=false;
-    }else{setStatus('该日期暂无数据，请尝试其他日期','error')}
-  }catch(e){setStatus('查询失败：'+e.message,'error')}
-  $('btnQuery').disabled=false;
-}
-
-function downloadExcel(){
-  if(!lastGainers&&!lastLosers)return;
-  var dateStr=lastQueryDate.replace(/-/g,'');
-  var wb=XLSX.utils.book_new();
-  var headers=['排名','基金代码','基金名称','净值日期','单位净值','累计净值','日增长率(%)'];
-  function toSheet(funds,sortDesc){
-    var sorted=funds.slice().sort(function(a,b){return sortDesc?b.dayGrowth-a.dayGrowth:a.dayGrowth-b.dayGrowth});
-    var rows=[headers];
-    sorted.forEach(function(f,i){
-      rows.push([i+1,f.code,f.name,f.date,parseFloat(f.unitNav),parseFloat(f.cumNav),parseFloat(f.dayGrowth.toFixed(2))]);
-    });
-    return XLSX.utils.aoa_to_sheet(rows);
+function renderTable(id, rows) {
+  const tbody = document.querySelector(`#${id} tbody`);
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td class="empty" colspan="7">暂无数据</td></tr>';
+    return;
   }
-  if(lastGainers&&lastGainers.length)XLSX.utils.book_append_sheet(wb,toSheet(lastGainers,true),'涨幅前100');
-  if(lastLosers&&lastLosers.length)XLSX.utils.book_append_sheet(wb,toSheet(lastLosers,false),'跌幅前100');
-  ['涨幅前100','跌幅前100'].forEach(function(name){
-    if(!wb.Sheets[name])return;
-    var sheet=wb.Sheets[name];
-    var cols=[];
-    for(var c=0;c<7;c++){
-      var maxW=8;
-      for(var r=0;r<101;r++){
-        var cell=sheet[XLSX.utils.encode_cell({r:r,c:c})];
-        if(cell&&cell.v!=null)maxW=Math.max(maxW,String(cell.v).length*2);
-      }
-      cols.push({wch:Math.min(maxW+4,40)});
-    }
-    sheet['!cols']=cols;
-  });
-  XLSX.writeFile(wb,'天天基金涨跌幅前100排名查询-'+dateStr+'.xlsx');
+  tbody.innerHTML = rows.map((f, i) => {
+    const cls = f.day_growth_rate >= 0 ? "up" : "down";
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${f.fund_code}</td>
+      <td>${f.fund_name}</td>
+      <td>${f.net_value_date}</td>
+      <td>${f.unit_net}</td>
+      <td>${f.cumulative_net}</td>
+      <td class="${cls}">${fmtPct(f.day_growth_rate)}</td>
+    </tr>`;
+  }).join("");
 }
 
-(function(){
-  var t=new Date();
-  $('queryDate').value=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+async function loadRanking(sort) {
+  const resp = await fetch(`/api/ranking?date=${encodeURIComponent(currentDate)}&sort=${sort}`);
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || "查询失败");
+  return data.funds || [];
+}
+
+async function queryData() {
+  currentDate = $("queryDate").value;
+  if (!currentDate) {
+    setStatus("请选择查询日期", "err");
+    return;
+  }
+  $("queryBtn").disabled = true;
+  $("excelBtn").disabled = true;
+  try {
+    setStatus("正在查询涨幅榜...");
+    gainers = await loadRanking("desc");
+    renderTable("gainers", gainers);
+
+    setStatus("正在查询跌幅榜...");
+    losers = await loadRanking("asc");
+    renderTable("losers", losers);
+
+    if (!gainers.length && !losers.length) {
+      setStatus("该日期暂无数据，请换一个交易日或稍早日期。", "err");
+    } else {
+      const actualDate = (gainers[0] || losers[0]).net_value_date;
+      setStatus(`查询完成：涨幅 ${gainers.length} 条，跌幅 ${losers.length} 条；实际净值日期 ${actualDate}`, "ok");
+      $("excelBtn").disabled = false;
+    }
+  } catch (err) {
+    setStatus("查询失败：" + err.message, "err");
+  } finally {
+    $("queryBtn").disabled = false;
+  }
+}
+
+function toSheetRows(rows) {
+  const header = ["排名", "基金代码", "基金名称", "净值日期", "单位净值", "累计净值", "日增长率(%)"];
+  return [header].concat(rows.map((f, i) => [
+    i + 1,
+    f.fund_code,
+    f.fund_name,
+    f.net_value_date,
+    Number(f.unit_net),
+    Number(f.cumulative_net),
+    Number(f.day_growth_rate.toFixed(2)),
+  ]));
+}
+
+function setSheetWidth(sheet) {
+  sheet["!cols"] = [
+    {wch: 8}, {wch: 12}, {wch: 34}, {wch: 12}, {wch: 12}, {wch: 12}, {wch: 12}
+  ];
+}
+
+function downloadExcel() {
+  const wb = XLSX.utils.book_new();
+  const s1 = XLSX.utils.aoa_to_sheet(toSheetRows(gainers));
+  const s2 = XLSX.utils.aoa_to_sheet(toSheetRows(losers));
+  setSheetWidth(s1);
+  setSheetWidth(s2);
+  XLSX.utils.book_append_sheet(wb, s1, "涨幅前100");
+  XLSX.utils.book_append_sheet(wb, s2, "跌幅前100");
+  XLSX.writeFile(wb, `天天基金涨跌幅前100排名查询-${currentDate.replaceAll("-", "")}.xlsx`);
+}
+
+(function initDate() {
+  const d = new Date();
+  $("queryDate").value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 })();
 </script>
 </body>
-</html>"""
+</html>
+"""
+
+
+def parse_rank_data(text):
+    match = re.search(r"datas\s*:\s*(\[.*?\])\s*,\s*allRecords", text, re.S)
+    if not match:
+        raise ValueError(text[:300])
+    return json.loads(match.group(1))
+
+
+def normalize_fund(item, rank):
+    fields = item.split(",")
+    if len(fields) < 7:
+        return None
+    try:
+        day_growth_rate = float(fields[6])
+    except ValueError:
+        return None
+    return {
+        "rank": rank,
+        "fund_code": fields[0],
+        "fund_name": fields[1],
+        "net_value_date": fields[3],
+        "unit_net": fields[4],
+        "cumulative_net": fields[5],
+        "day_growth_rate": day_growth_rate,
+    }
+
+
+def fetch_ranking(query_date, sort_order):
+    # 关键修复：日增长率排序字段是 rzdf，不是 srzdf。
+    params = {
+        "op": "ph",
+        "dt": "kf",
+        "ft": "all",
+        "sc": "rzdf",
+        "st": sort_order,
+        "sd": "1900-01-01",
+        "ed": query_date,
+        "pi": "1",
+        "pn": "100",
+        "dx": "1",
+    }
+    resp = requests.get(EASTMONEY_API, params=params, headers=HEADERS, timeout=15)
+    resp.encoding = "utf-8"
+    resp.raise_for_status()
+    funds = []
+    for i, item in enumerate(parse_rank_data(resp.text), start=1):
+        fund = normalize_fund(item, i)
+        if fund:
+            funds.append(fund)
+    funds.sort(key=lambda x: x["day_growth_rate"], reverse=(sort_order == "desc"))
+    for i, fund in enumerate(funds, start=1):
+        fund["rank"] = i
+    return funds[:100]
 
 
 @app.route("/")
@@ -209,26 +274,20 @@ def index():
     return HTML_PAGE
 
 
-@app.route("/api")
-def api_proxy():
+@app.route("/api/ranking")
+def api_ranking():
+    query_date = request.args.get("date", "")
+    sort_order = request.args.get("sort", "desc")
+    if sort_order not in {"asc", "desc"}:
+        return jsonify({"error": "sort 参数只能是 asc 或 desc"}), 400
     try:
-        query_string = request.query_string.decode("utf-8")
-        url = f"{API_URL}?{query_string}"
-        resp = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://fund.eastmoney.com/data/fundranking.html",
-        }, timeout=15)
-        resp.encoding = "utf-8"
-
-        match = re.search(r'(\bdatas)\s*:\s*(\[.*?\])\s*,\s*(\ballRecords)', resp.text, re.DOTALL)
-        if not match:
-            return jsonify({"error": "解析数据失败"}), 500
-
-        datas = json.loads(match.group(2))
-        return jsonify({"datas": datas})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        datetime.strptime(query_date, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "date 参数格式应为 YYYY-MM-DD"}), 400
+    try:
+        return jsonify({"funds": fetch_ranking(query_date, sort_order)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 if __name__ == "__main__":
